@@ -1,11 +1,43 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import dotenv from 'dotenv'
 import mysql from 'mysql2/promise'
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') })
+
+const parseDatabaseUrl = () => {
+  const databaseUrl = process.env.DATABASE_URL || process.env.MYSQL_URL
+  if (!databaseUrl) return null
+
+  try {
+    const parsed = new URL(databaseUrl)
+    return {
+      host: parsed.hostname,
+      port: Number(parsed.port || 3306),
+      user: decodeURIComponent(parsed.username),
+      password: decodeURIComponent(parsed.password),
+      database: decodeURIComponent(parsed.pathname.replace(/^\/+/, '')),
+    }
+  } catch {
+    return null
+  }
+}
+
+const parsedDatabaseUrl = parseDatabaseUrl()
+
+const rawDbHost = process.env.DB_HOST || ''
+const normalizedDbHost = rawDbHost.includes(':') && !rawDbHost.startsWith('[') ? rawDbHost.split(':')[0] : rawDbHost
+const normalizedDbPort = Number(process.env.DB_PORT || (rawDbHost.includes(':') && !rawDbHost.startsWith('[') ? rawDbHost.split(':').at(-1) : undefined) || parsedDatabaseUrl?.port || 3306)
+
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'homekind',
+  host: parsedDatabaseUrl?.host || normalizedDbHost || 'localhost',
+  port: Number(parsedDatabaseUrl?.port || normalizedDbPort || 3306),
+  user: parsedDatabaseUrl?.user || process.env.DB_USER || 'root',
+  password: parsedDatabaseUrl?.password || process.env.DB_PASSWORD || '',
+  database: parsedDatabaseUrl?.database || process.env.DB_NAME || 'homekind',
+  ssl: process.env.DB_HOST?.includes('rlwy.net') || process.env.DATABASE_URL?.includes('rlwy.net') ? { rejectUnauthorized: false } : undefined,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
