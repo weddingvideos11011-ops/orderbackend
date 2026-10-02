@@ -16,7 +16,7 @@ const app = express()
 const port = Number(process.env.PORT || 3001)
 const jwtSecret = process.env.JWT_SECRET || 'change-this-secret'
 
-const allowedOrigins = [process.env.CLIENT_ORIGIN || 'https://orderfrontend.vercel.app/', process.env.ADMIN_ORIGIN || 'https://orderadminportal.vercel.app/']
+const allowedOrigins = [process.env.CLIENT_ORIGIN || 'http://localhost:5173', process.env.ADMIN_ORIGIN || 'http://localhost:5174']
 app.use(cors({ origin: allowedOrigins }))
 app.use(express.json())
 
@@ -267,8 +267,14 @@ app.use((error, _request, response, _next) => {
 })
 
 initializeDatabase().then(() => {
-  app.listen(port, () => console.log(`Vvivers Express API listening on http://localhost:${port}`))
+  if (!process.env.VERCEL) {
+    app.listen(port, () => console.log(`Vvivers Express API listening on http://localhost:${port}`))
+  } else {
+    console.log('Vercel serverless runtime ready')
+  }
 }).catch((error) => {
   console.error('Unable to initialize MySQL database:', error.message)
   process.exit(1)
 })
+
+export default app
