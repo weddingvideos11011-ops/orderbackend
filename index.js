@@ -16,7 +16,7 @@ const app = express()
 const port = Number(process.env.PORT || 3001)
 const jwtSecret = process.env.JWT_SECRET || 'change-this-secret'
 
-const allowedOrigins = [process.env.CLIENT_ORIGIN || 'https://orderfrontend.vercel.app/', 'vvivers.com', 'vvivers.com/', 'https://vvivers.com', 'https://vvivers.com/', 'https://vvivers.com', 'www.vvivers.com','admin.vvivers.com', 'orderfrontend.vercel.app/', process.env.ADMIN_ORIGIN || 'https://orderadminportal.vercel.app/', 'orderadminportal.vercel.app/', 'orderadminportal.vercel.app', 'https://orderadminportal.vercel.app', 'orderfrontend.vercel.app','https://orderfrontend.vercel.app']
+const allowedOrigins = [process.env.CLIENT_ORIGIN || 'https://orderfrontend.vercel.app/', 'vvivers.com', 'https://www.vvivers.com', 'vvivers.com/', 'https://vvivers.com', 'https://vvivers.com/', 'https://vvivers.com', 'www.vvivers.com','admin.vvivers.com', 'orderfrontend.vercel.app/', process.env.ADMIN_ORIGIN || 'https://orderadminportal.vercel.app/', 'orderadminportal.vercel.app/', 'orderadminportal.vercel.app', 'https://orderadminportal.vercel.app', 'orderfrontend.vercel.app','https://orderfrontend.vercel.app']
 app.use(cors({ origin: allowedOrigins }))
 app.use(express.json())
 
