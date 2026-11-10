@@ -19,7 +19,7 @@ const pool = new Pool({
 export async function initializeDatabase() {
   const client = await pool.connect()
   try {
-    await client.query(`
+    /*await client.query(`
       CREATE TABLE IF NOT EXISTS categories (
         id VARCHAR(80) PRIMARY KEY,
         name VARCHAR(100) NOT NULL UNIQUE,
@@ -69,7 +69,7 @@ export async function initializeDatabase() {
         status VARCHAR(20) NOT NULL DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-    `)
+    `)*/
   } finally {
     client.release()
   }
