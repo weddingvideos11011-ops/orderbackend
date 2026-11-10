@@ -46,7 +46,7 @@ function slugify(value) {
 app.get('/api/health', async (_request, response) => {
   try {
     await pool.query('SELECT 1')
-    response.json({ ok: true, database: 'sqlite' })
+    response.json({ ok: true, database: 'postgresql' })
   } catch {
     response.status(503).json({ ok: false, error: 'Database unavailable' })
   }
@@ -63,7 +63,7 @@ app.get('/api/company', (_request, response) => {
 
 app.get('/api/categories', async (_request, response, next) => {
   try {
-    const [rows] = await pool.query(`SELECT categories.id, categories.name, COUNT(products.id) AS product_count
+    const { rows } = await pool.query(`SELECT categories.id, categories.name, COUNT(products.id) AS product_count
       FROM categories LEFT JOIN products ON products.category_id = categories.id
       GROUP BY categories.id, categories.name ORDER BY categories.name`)
     response.json(rows.map((category) => ({ ...category, product_count: Number(category.product_count) })))
@@ -84,17 +84,23 @@ app.post('/api/admin/login', (request, response) => {
 
 app.get('/api/admin/overview', requireAdmin, async (_request, response, next) => {
   try {
-    const [[products]] = await pool.query('SELECT COUNT(*) AS total, SUM(is_featured = 1) AS featured FROM products')
-    const [[categories]] = await pool.query('SELECT COUNT(*) AS total FROM categories')
-    const [[quotes]] = await pool.query("SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending FROM quote_requests")
-    const [[inquiries]] = await pool.query("SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending FROM contact_requests")
-    response.json({ products, categories, quotes, inquiries })
+    const productResult = await pool.query('SELECT COUNT(*) AS total, SUM(CASE WHEN is_featured = TRUE THEN 1 ELSE 0 END) AS featured FROM products')
+    const categoryResult = await pool.query('SELECT COUNT(*) AS total FROM categories')
+    const quoteResult = await pool.query("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending FROM quote_requests")
+    const inquiryResult = await pool.query("SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending FROM contact_requests")
+    
+    response.json({
+      products: productResult.rows[0],
+      categories: categoryResult.rows[0],
+      quotes: quoteResult.rows[0],
+      inquiries: inquiryResult.rows[0],
+    })
   } catch (error) { next(error) }
 })
 
 app.get('/api/admin/quotes', requireAdmin, async (_request, response, next) => {
   try {
-    const [rows] = await pool.query(`SELECT quote_requests.id, quote_requests.product_id, products.name AS product_name,
+    const { rows } = await pool.query(`SELECT quote_requests.id, quote_requests.product_id, products.name AS product_name,
       quote_requests.name, quote_requests.email, quote_requests.notes, quote_requests.status, quote_requests.created_at
       FROM quote_requests JOIN products ON products.id = quote_requests.product_id
       ORDER BY quote_requests.created_at DESC`)
@@ -104,7 +110,7 @@ app.get('/api/admin/quotes', requireAdmin, async (_request, response, next) => {
 
 app.get('/api/admin/inquiries', requireAdmin, async (_request, response, next) => {
   try {
-    const [rows] = await pool.query('SELECT id, name, email, phone, message, status, created_at FROM contact_requests ORDER BY created_at DESC')
+    const { rows } = await pool.query('SELECT id, name, email, phone, message, status, created_at FROM contact_requests ORDER BY created_at DESC')
     response.json(rows)
   } catch (error) { next(error) }
 })
@@ -113,8 +119,8 @@ app.patch('/api/admin/quotes/:id/status', requireAdmin, async (request, response
   try {
     const { status } = request.body
     if (!['pending', 'fulfilled'].includes(status)) return response.status(400).json({ error: 'Status must be pending or fulfilled' })
-    const [result] = await pool.execute('UPDATE quote_requests SET status = ? WHERE id = ?', [status, request.params.id])
-    if (!result.affectedRows) return response.status(404).json({ error: 'Quotation not found' })
+    const result = await pool.query('UPDATE quote_requests SET status = $1 WHERE id = $2', [status, request.params.id])
+    if (!result.rowCount) return response.status(404).json({ error: 'Quotation not found' })
     response.json({ id: request.params.id, status })
   } catch (error) { next(error) }
 })
@@ -123,8 +129,8 @@ app.patch('/api/admin/inquiries/:id/status', requireAdmin, async (request, respo
   try {
     const { status } = request.body
     if (!['pending', 'fulfilled'].includes(status)) return response.status(400).json({ error: 'Status must be pending or fulfilled' })
-    const [result] = await pool.execute('UPDATE contact_requests SET status = ? WHERE id = ?', [status, request.params.id])
-    if (!result.affectedRows) return response.status(404).json({ error: 'Inquiry not found' })
+    const result = await pool.query('UPDATE contact_requests SET status = $1 WHERE id = $2', [status, request.params.id])
+    if (!result.rowCount) return response.status(404).json({ error: 'Inquiry not found' })
     response.json({ id: request.params.id, status })
   } catch (error) { next(error) }
 })
@@ -134,10 +140,10 @@ app.post('/api/admin/categories', requireAdmin, async (request, response, next) 
     const name = request.body.name?.trim()
     const id = slugify(name || '')
     if (!name || !id) return response.status(400).json({ error: 'A valid category name is required' })
-    await pool.execute('INSERT INTO categories (id, name) VALUES (?, ?)', [id, name])
+    await pool.query('INSERT INTO categories (id, name) VALUES ($1, $2)', [id, name])
     response.status(201).json({ id, name, product_count: 0 })
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT' || error.message?.includes('UNIQUE constraint failed')) {
+    if (error.code === '23505') { // Postgres unique violation code
       return response.status(409).json({ error: 'That category already exists' })
     }
     next(error)
@@ -146,11 +152,13 @@ app.post('/api/admin/categories', requireAdmin, async (request, response, next) 
 
 app.delete('/api/admin/categories/:id', requireAdmin, async (request, response, next) => {
   try {
-    const [result] = await pool.execute('DELETE FROM categories WHERE id = ?', [request.params.id])
-    if (!result.affectedRows) return response.status(404).json({ error: 'Category not found' })
+    const result = await pool.query('DELETE FROM categories WHERE id = $1', [request.params.id])
+    if (!result.rowCount) return response.status(404).json({ error: 'Category not found' })
     response.json({ deleted: request.params.id })
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT') return response.status(409).json({ error: 'Remove or move this category’s products before deleting it' })
+    if (error.code === '23503') { // Postgres foreign key violation code
+      return response.status(409).json({ error: 'Remove or move this category’s products before deleting it' })
+    }
     next(error)
   }
 })
@@ -163,31 +171,31 @@ app.post('/api/admin/products', requireAdmin, async (request, response, next) =>
     }
     if (!Array.isArray(tags)) return response.status(400).json({ error: 'Tags must be a list' })
     const id = randomUUID()
-    await pool.execute(`INSERT INTO products (id, name, category_id, size, price, accent, image, description, tags, is_featured, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`, [id, name.trim(), categoryId, size.trim(), Number(price), accent, image.trim(), description.trim(), JSON.stringify(tags), Boolean(isFeatured) ? 1 : 0])
+    await pool.query(`INSERT INTO products (id, name, category_id, size, price, accent, image, description, tags, is_featured, sort_order)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0)`, [id, name.trim(), categoryId, size.trim(), Number(price), accent, image.trim(), description.trim(), JSON.stringify(tags), Boolean(isFeatured)])
     response.status(201).json({ id, name: name.trim() })
   } catch (error) {
-    if (error.code === 'ER_NO_REFERENCED_ROW_2' || error.code === 'SQLITE_CONSTRAINT') return response.status(400).json({ error: 'Select an existing category' })
+    if (error.code === '23503') return response.status(400).json({ error: 'Select an existing category' })
     next(error)
   }
 })
 
 app.patch('/api/admin/products/:id/featured', requireAdmin, async (request, response, next) => {
   try {
-    const isFeatured = Boolean(request.body.is_featured) ? 1 : 0
-    const [result] = await pool.execute('UPDATE products SET is_featured = ? WHERE id = ?', [isFeatured, request.params.id])
-    if (!result.affectedRows) return response.status(404).json({ error: 'Product not found' })
-    response.json({ id: request.params.id, is_featured: Boolean(isFeatured) })
+    const isFeatured = Boolean(request.body.is_featured)
+    const result = await pool.query('UPDATE products SET is_featured = $1 WHERE id = $2', [isFeatured, request.params.id])
+    if (!result.rowCount) return response.status(404).json({ error: 'Product not found' })
+    response.json({ id: request.params.id, is_featured: isFeatured })
   } catch (error) { next(error) }
 })
 
 app.delete('/api/admin/products/:id', requireAdmin, async (request, response, next) => {
   try {
-    const [result] = await pool.execute('DELETE FROM products WHERE id = ?', [request.params.id])
-    if (!result.affectedRows) return response.status(404).json({ error: 'Product not found' })
+    const result = await pool.query('DELETE FROM products WHERE id = $1', [request.params.id])
+    if (!result.rowCount) return response.status(404).json({ error: 'Product not found' })
     response.json({ deleted: request.params.id })
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT') return response.status(409).json({ error: 'This product has quotation history and cannot be deleted' })
+    if (error.code === '23503') return response.status(409).json({ error: 'This product has quotation history and cannot be deleted' })
     next(error)
   }
 })
@@ -198,11 +206,11 @@ app.post('/api/contact', async (request, response, next) => {
     if (!name?.trim() || !email?.trim() || !message?.trim()) {
       return response.status(400).json({ error: 'Name, email, and message are required' })
     }
-    const [result] = await pool.execute(
-      'INSERT INTO contact_requests (name, email, phone, message) VALUES (?, ?, ?, ?)',
+    const result = await pool.query(
+      'INSERT INTO contact_requests (name, email, phone, message) VALUES ($1, $2, $3, $4) RETURNING id',
       [name.trim(), email.trim().toLowerCase(), phone.trim(), message.trim()],
     )
-    response.status(201).json({ id: result.insertId, message: 'Your message has been received' })
+    response.status(201).json({ id: result.rows[0].id, message: 'Your message has been received' })
   } catch (error) { next(error) }
 })
 
@@ -211,11 +219,11 @@ app.get('/api/products', async (request, response, next) => {
     const conditions = []
     const values = []
     if (request.query.category) {
-      conditions.push('products.category_id = ?')
       values.push(request.query.category)
+      conditions.push(`products.category_id = $${values.length}`)
     }
     if (request.query.featured === 'true') {
-      conditions.push('products.is_featured = 1')
+      conditions.push('products.is_featured = TRUE')
     }
 
     const sortOptions = {
@@ -227,7 +235,7 @@ app.get('/api/products', async (request, response, next) => {
     }
     const orderBy = sortOptions[request.query.sort] || sortOptions.default
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
-    const [rows] = await pool.execute(`SELECT products.id, products.name, products.category_id,
+    const { rows } = await pool.query(`SELECT products.id, products.name, products.category_id,
       categories.name AS category, products.size, products.price, products.accent, products.image,
       products.description, products.tags, products.is_featured, products.sort_order
       FROM products JOIN categories ON categories.id = products.category_id ${where} ORDER BY ${orderBy}`, values)
@@ -237,10 +245,10 @@ app.get('/api/products', async (request, response, next) => {
 
 app.get('/api/products/:id', async (request, response, next) => {
   try {
-    const [rows] = await pool.execute(`SELECT products.id, products.name, products.category_id,
+    const { rows } = await pool.query(`SELECT products.id, products.name, products.category_id,
       categories.name AS category, products.size, products.price, products.accent, products.image,
       products.description, products.tags, products.is_featured, products.sort_order
-      FROM products JOIN categories ON categories.id = products.category_id WHERE products.id = ?`, [request.params.id])
+      FROM products JOIN categories ON categories.id = products.category_id WHERE products.id = $1`, [request.params.id])
     if (!rows[0]) return response.status(404).json({ error: 'Product not found' })
     response.json({ ...rows[0], price: Number(rows[0].price), tags: typeof rows[0].tags === 'string' ? JSON.parse(rows[0].tags) : rows[0].tags })
   } catch (error) { next(error) }
@@ -250,15 +258,15 @@ app.post('/api/quotes', async (request, response, next) => {
   try {
     const { productId, name, email, notes = '' } = request.body
     if (!productId || !name?.trim() || !email?.trim()) return response.status(400).json({ error: 'Product, name, and email are required' })
-    const [result] = await pool.execute('INSERT INTO quote_requests (product_id, name, email, notes) VALUES (?, ?, ?, ?)', [productId, name.trim(), email.trim(), notes.trim()])
-    response.status(201).json({ id: result.insertId, message: 'Quote request received' })
+    const result = await pool.query('INSERT INTO quote_requests (product_id, name, email, notes) VALUES ($1, $2, $3, $4) RETURNING id', [productId, name.trim(), email.trim(), notes.trim()])
+    response.status(201).json({ id: result.rows[0].id, message: 'Quote request received' })
   } catch (error) { next(error) }
 })
 
 app.post('/api/auth/login', async (request, response, next) => {
   try {
     const { email, password } = request.body
-    const [rows] = await pool.execute('SELECT id, email, password_hash FROM users WHERE email = ?', [email?.trim().toLowerCase()])
+    const { rows } = await pool.query('SELECT id, email, password_hash FROM users WHERE email = $1', [email?.trim().toLowerCase()])
     if (!rows[0] || !(await bcrypt.compare(password || '', rows[0].password_hash))) return response.status(401).json({ error: 'Invalid email or password' })
     const token = jwt.sign({ userId: rows[0].id, email: rows[0].email }, jwtSecret, { expiresIn: '7d' })
     response.json({ token, user: { id: rows[0].id, email: rows[0].email } })
@@ -277,7 +285,7 @@ initializeDatabase().then(() => {
     console.log('Vercel serverless runtime ready')
   }
 }).catch((error) => {
-  console.error('Unable to initialize SQLite database:', error.message)
+  console.error('Unable to initialize PostgreSQL database:', error.message)
   process.exit(1)
 })
 
