@@ -43,10 +43,12 @@ function slugify(value) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80)
 }
 
+
 app.get('/api/health', async (_request, response) => {
   try {
     await pool.query('SELECT 1')
-    response.json({ ok: true, database: 'mysql' })
+    response.json({ ok: true, database: 'mysql' }) // [!code --]
+    response.json({ ok: true, database: 'sqlite' }) // [!code ++]
   } catch {
     response.status(503).json({ ok: false, error: 'Database unavailable' })
   }
@@ -82,9 +84,11 @@ app.post('/api/admin/login', (request, response) => {
   response.json({ token, userId: process.env.ADMIN_USER })
 })
 
+// Change this:
 app.get('/api/admin/overview', requireAdmin, async (_request, response, next) => {
   try {
-    const [[products]] = await pool.query('SELECT COUNT(*) AS total, SUM(is_featured = TRUE) AS featured FROM products')
+    const [[products]] = await pool.query('SELECT COUNT(*) AS total, SUM(is_featured = TRUE) AS featured FROM products') // [!code --]
+    const [[products]] = await pool.query('SELECT COUNT(*) AS total, SUM(is_featured = 1) AS featured FROM products') // [!code ++]
     const [[categories]] = await pool.query('SELECT COUNT(*) AS total FROM categories')
     const [[quotes]] = await pool.query("SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending FROM quote_requests")
     const [[inquiries]] = await pool.query("SELECT COUNT(*) AS total, SUM(status = 'pending') AS pending FROM contact_requests")
@@ -129,6 +133,7 @@ app.patch('/api/admin/inquiries/:id/status', requireAdmin, async (request, respo
   } catch (error) { next(error) }
 })
 
+// Change this:
 app.post('/api/admin/categories', requireAdmin, async (request, response, next) => {
   try {
     const name = request.body.name?.trim()
@@ -137,18 +142,23 @@ app.post('/api/admin/categories', requireAdmin, async (request, response, next) 
     await pool.execute('INSERT INTO categories (id, name) VALUES (?, ?)', [id, name])
     response.status(201).json({ id, name, product_count: 0 })
   } catch (error) {
-    if (error.code === 'ER_DUP_ENTRY') return response.status(409).json({ error: 'That category already exists' })
+    if (error.code === 'ER_DUP_ENTRY') return response.status(409).json({ error: 'That category already exists' }) // [!code --]
+    if (error.code === 'SQLITE_CONSTRAINT' || error.message?.includes('UNIQUE constraint failed')) { // [!code ++]
+      return response.status(409).json({ error: 'That category already exists' }) // [!code ++]
+    } // [!code ++]
     next(error)
   }
 })
 
+// Change this:
 app.delete('/api/admin/categories/:id', requireAdmin, async (request, response, next) => {
   try {
     const [result] = await pool.execute('DELETE FROM categories WHERE id = ?', [request.params.id])
     if (!result.affectedRows) return response.status(404).json({ error: 'Category not found' })
     response.json({ deleted: request.params.id })
   } catch (error) {
-    if (error.code === 'ER_ROW_IS_REFERENCED_2') return response.status(409).json({ error: 'Remove or move this category’s products before deleting it' })
+    if (error.code === 'ER_ROW_IS_REFERENCED_2') return response.status(409).json({ error: 'Remove or move this category’s products before deleting it' }) // [!code --]
+    if (error.code === 'SQLITE_CONSTRAINT') return response.status(409).json({ error: 'Remove or move this category’s products before deleting it' }) // [!code ++]
     next(error)
   }
 })
@@ -161,8 +171,8 @@ app.post('/api/admin/products', requireAdmin, async (request, response, next) =>
     }
     if (!Array.isArray(tags)) return response.status(400).json({ error: 'Tags must be a list' })
     const id = randomUUID()
-    await pool.execute(`INSERT INTO products (id, name, category_id, size, price, accent, image, description, tags, is_featured, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`, [id, name.trim(), categoryId, size.trim(), Number(price), accent, image.trim(), description.trim(), JSON.stringify(tags), Boolean(isFeatured)])
+   await pool.execute(`INSERT INTO products (id, name, category_id, size, price, accent, image, description, tags, is_featured, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`, [id, name.trim(), categoryId, size.trim(), Number(price), accent, image.trim(), description.trim(), JSON.stringify(tags), Boolean(isFeatured) ? 1 : 0])
     response.status(201).json({ id, name: name.trim() })
   } catch (error) {
     if (error.code === 'ER_NO_REFERENCED_ROW_2') return response.status(400).json({ error: 'Select an existing category' })
@@ -179,13 +189,15 @@ app.patch('/api/admin/products/:id/featured', requireAdmin, async (request, resp
   } catch (error) { next(error) }
 })
 
+// Change this:
 app.delete('/api/admin/products/:id', requireAdmin, async (request, response, next) => {
   try {
     const [result] = await pool.execute('DELETE FROM products WHERE id = ?', [request.params.id])
     if (!result.affectedRows) return response.status(404).json({ error: 'Product not found' })
     response.json({ deleted: request.params.id })
   } catch (error) {
-    if (error.code === 'ER_ROW_IS_REFERENCED_2') return response.status(409).json({ error: 'This product has quotation history and cannot be deleted' })
+    if (error.code === 'ER_ROW_IS_REFERENCED_2') return response.status(409).json({ error: 'This product has quotation history and cannot be deleted' }) // [!code --]
+    if (error.code === 'SQLITE_CONSTRAINT') return response.status(409).json({ error: 'This product has quotation history and cannot be deleted' }) // [!code ++]
     next(error)
   }
 })
@@ -212,7 +224,9 @@ app.get('/api/products', async (request, response, next) => {
       conditions.push('products.category_id = ?')
       values.push(request.query.category)
     }
-    if (request.query.featured === 'true') conditions.push('products.is_featured = TRUE')
+    // Change this:
+    
+    if (request.query.featured === 'true') conditions.push('products.is_featured = 1') // [!code ++]
 
     const sortOptions = {
       category: 'categories.name, products.name',
