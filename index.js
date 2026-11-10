@@ -182,12 +182,16 @@ app.post('/api/admin/products', requireAdmin, async (request, response, next) =>
 
 app.patch('/api/admin/products/:id/featured', requireAdmin, async (request, response, next) => {
   try {
-    const isFeatured = Boolean(request.body.is_featured)
-    const result = await pool.query('UPDATE products SET is_featured = $1 WHERE id = $2', [isFeatured, request.params.id])
-    if (!result.rowCount) return response.status(404).json({ error: 'Product not found' })
-    response.json({ id: request.params.id, is_featured: isFeatured })
-  } catch (error) { next(error) }
-})
+    const rawValue = request.body.is_featured;
+    const isFeatured = rawValue === true || rawValue === 'true' || rawValue === 1 || rawValue === '1';
+
+    const result = await pool.query('UPDATE products SET is_featured = $1 WHERE id = $2', [isFeatured, request.params.id]);
+    if (!result.rowCount) return response.status(404).json({ error: 'Product not found' });
+    response.json({ id: request.params.id, is_featured: isFeatured });
+  } catch (error) { 
+    next(error); 
+  }
+});
 
 app.delete('/api/admin/products/:id', requireAdmin, async (request, response, next) => {
   try {
